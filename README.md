@@ -8,15 +8,15 @@ Report: https://www.overleaf.com/read/wqwxcfsxntff#f06c0b
 
 ____________
 ## TODO
-- Use kinematics to substitute the current occupancy grid class
+- Use kinematics to substitute the current occupancy grid class [done]
 
-- He cannot know when he cant turn left or right because the lane is the final one
+- He cannot know when he cant turn left or right because the lane is the final one [done]
 
 - Change the occupancy class to use occupancy grid with 5m grid size, 3 lanes and -30, 30 ahead
 
 - Make a plot history to check the Q-function training learning   
 
-- Check how many times each state is visited, and the distribution thereof
+- Check how many times each state is visited, and the distribution thereof 
 
 - Check the action distribution, so as to see if slowing down is the most chosen action and the one with the best Q value
 
@@ -27,9 +27,9 @@ ____________
 ______________
 ## Ideas
 ### Kinematics: 
-- State space in this maner: (danger ahead, danger left, danger right, danger behind, lane position, (maybe) speed)
+- State space in this maner: (danger ahead, danger left, danger right, danger behind, lane position, (maybe) speed) [done]
 
-- Lane position can be 0 if in the middle, 1 if in the right, -1 if in the left
+- Lane position can be 0 if in the middle, 1 if in the right, -1 if in the left [done]
 
 - Do we need speed? because if the speed is too fast, it might not be able to turn in time or we could just increase the safety distance, and then we wouldn't need speed
 
