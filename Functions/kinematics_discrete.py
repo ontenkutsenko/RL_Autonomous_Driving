@@ -568,11 +568,13 @@ class Algorithm(Kinematics):
 
         mean_reward = np.mean([reward for reward, _ in evaluation_data])
         mean_steps = np.mean([steps for _, steps in evaluation_data])
+        std_reward = np.std([reward for reward, _ in evaluation_data])
+        std_steps = np.std([steps for _, steps in evaluation_data])
         mean_reward_per_step = mean_reward/mean_steps
         mean_speed = np.mean(speed_data)
         controlled_env.close()
 
-        return mean_reward, mean_steps, mean_reward_per_step, mean_speed
+        return mean_reward, mean_steps, mean_reward_per_step, mean_speed, std_reward, std_steps
     
     def evaluate_during_train(self, current_episode, iterations=4, max_steps=100):
         controlled_env = gym.make('highway-fast-v0', config=self.get_config_control())

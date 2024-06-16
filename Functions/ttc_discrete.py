@@ -485,7 +485,7 @@ class DQNAgent:
         return average_reward, average_steps, action_distribution
 
 
-    def evaluate_and_render(self, n_games=3, steps=200, verbose=True):
+    def evaluate_and_render(self, n_games=3, steps=200, verbose=True, stds=False):
         horizon = self.env.horizon
         ttc_env = TimeToCollision(horizon=horizon, render_mode='human', config=self.get_evaluation_config())
 
@@ -509,4 +509,6 @@ class DQNAgent:
         action_distribution = np.array([np.sum(actions_hist == i) for i in range(ttc_env.action_space_size)]) / len(actions_hist)
 
         ttc_env.close()
+        if stds:
+            return np.mean(rewards), np.mean(steps_array), action_distribution, np.std(rewards), np.std(steps_array)
         return np.mean(rewards), np.mean(steps_array), action_distribution
