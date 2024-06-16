@@ -8,9 +8,10 @@ import pickle
 from matplotlib import pyplot as plt
 from IPython.display import clear_output
 import os
+from gym.wrappers.monitoring.video_recorder import VideoRecorder
 from collections import deque
 from Functions.config_kinematics_discrete import default_config, optimum_q_kinematics
-from Functions.funcs_kinematics_discrete import fix_reward, decode_meta_action
+from Functions.funcs_kinematics_discrete import fix_reward, decode_meta_action, random_argmax
 
 class ObservationType: 
     def __init__(self, 
@@ -217,15 +218,15 @@ class Kinematics(ObservationType):
 
     def get_n_closest(self):
         """
-        Get the n closest cars to the agent
+        Get the n closest cars to the self
         Returns:
-            closest_car_positions: np.array, the positions of the n closest cars to the agent. If there are less than n_closest cars, the array is padded with the crop_dist values
+            closest_car_positions: np.array, the positions of the n closest cars to the self. If there are less than n_closest cars, the array is padded with the crop_dist values
         """
 
         car_positions = self.get_car_positions()
         distances = np.linalg.norm(car_positions, axis=1)
 
-        # Remove the agent position
+        # Remove the self position
         closest = np.argsort(distances)[1:self.n_closest+1]
         closest_car_positions = car_positions[closest]
 
@@ -414,7 +415,8 @@ class Algorithm(Kinematics):
         self.epsilon_decay, self.min_epsilon = epsilon_decay, min_epsilon
         self.Q_stats = self.Q.copy()
         self.rewards_hist, self.rewards_hist_compare = [], []
-        self.rewards_ev_hist, self.steps_ev_hist, self.actions_ev_dist, self.speed_ev_hist = [], [], [], []
+        self.rewards_ev_hist, self.steps_ev_hist, self.actions_ev_dist, self.speed_ev_hist, self.rewards_ev_hist_std = [], [], [], [], []
+        self.q_measure_hist, self.q_explored_hist = [], []
 
     def initialize_Q(self, print_stats = False):
         # Combine the possible states with the possible actions
@@ -572,7 +574,7 @@ class Algorithm(Kinematics):
 
         return mean_reward, mean_steps, mean_reward_per_step, mean_speed
     
-    def evaluate_during_train(self, current_episode, iterations=4, max_steps=200):
+    def evaluate_during_train(self, current_episode, iterations=4, max_steps=100):
         controlled_env = gym.make('highway-fast-v0', config=self.get_config_control())
         reward_hist, speed_hist, actions_hist, steps_hist  = [], [], [], []
         print('Evaluating the model during training...')
@@ -594,43 +596,63 @@ class Algorithm(Kinematics):
             reward_hist.append(cum_reward)
         
         mean_reward = np.mean(reward_hist)
+        std_reward = np.std(reward_hist)
         mean_speed = np.mean(speed_hist)
         mean_steps = np.mean(steps_hist)
         actions_hist = np.array(actions_hist)
         action_distribution = np.array([np.sum(actions_hist == i) for i in range(5)]) / len(actions_hist)
 
         self.rewards_ev_hist.append(mean_reward)
+        self.rewards_ev_hist_std.append(std_reward)
         self.speed_ev_hist.append(mean_speed)
         self.steps_ev_hist.append(mean_steps)
         self.actions_ev_dist.append(action_distribution)
 
         # Now plot the results
         clear_output(wait=True)
-        plt.figure(figsize=[16, 10])
+        plt.figure(figsize=[17, 15])
         plt.suptitle(f"Stats for episode {current_episode}")
 
-        plt.subplot(2, 2, 1)
+        plt.subplot(3, 2, 1)
         plt.plot(self.rewards_ev_hist, label='Rewards')
         plt.title('Mean reward per episode')
         plt.grid()
 
-        plt.subplot(2, 2, 2)
+        plt.subplot(3, 2, 2)
         plt.plot(self.speed_ev_hist, label='Speed')
         plt.title('Mean speed per episode')
         plt.grid()
 
-        plt.subplot(2, 2, 3)
+        plt.subplot(3, 2, 3)
         plt.plot(self.steps_ev_hist, label='Steps')
         plt.title('Mean steps per episode')
         plt.grid()
 
-        plt.subplot(2, 2, 4)
+        plt.subplot(3, 2, 4)
         action_distribution_history = np.array(self.actions_ev_dist)
         for i in range(5):
             plt.plot(action_distribution_history[:, i], label=f'{decode_meta_action(i)}')
-        plt.title('Action distribution')
+        plt.title('Action distribution during evaluation')
         plt.grid()
         plt.legend()
+
+        plt.subplot(3, 2, 5)
+        # Lets use the qvalues to get the action distribution
+        q_values = {state: random_argmax([self.Q[(state, action)] for action in range(5)]) for state in self.states}
+        # Only use the states present in optimal_q_kinematics
+        action_distribution = np.array([np.sum([q_values[state] == i for state in optimum_q_kinematics.keys()]) for i in range(5)]) / len(optimum_q_kinematics)
+        plt.bar([decode_meta_action(i) for i in range(5)], action_distribution)
+        plt.title('Action distribution for the Q values')
+
+        plt.subplot(3, 2, 6)
+        # Plot the q explored and the q measure
+        plt.plot(self.q_explored_hist, label='Q explored')
+        plt.plot(self.q_measure_hist, label='Q measure') 
+        plt.title('Q explored and Q measure (optimal Q values (%))')
+        plt.grid()
+        plt.legend()
+    
+        plt.tight_layout()
         plt.show()
 
         controlled_env.close()
@@ -652,6 +674,28 @@ class Algorithm(Kinematics):
             "change_lane_reward": self.change_lane_reward,
             "collision_reward": self.config["collision_reward"],
         }
+    
+
+    def record_video(self, save_dir, max_steps=200):
+        config = self.config.copy()
+        config.update({'policy_frequency': 5, 'sim_frequency': 15})
+        env = gym.make('highway-v0', render_mode='rgb_array', config=self.config) 
+        video = VideoRecorder(env, path=save_dir)
+        self.current_obs, _ = env.reset(seed=np.random.randint(100000))
+        state = self.get_state()
+        done = False
+        steps = 0
+
+        while not done and steps < max_steps:
+            env.render()
+            video.capture_frame()
+            self.current_obs, reward, done, truncated, info = env.step(self.policy_Q(state))
+            state = self.get_state()
+            steps += 1
+            done = done or truncated
+
+        video.close()
+        env.close()
 
 
 class Q_learning(Algorithm):
@@ -664,7 +708,7 @@ class Q_learning(Algorithm):
         Arguments:
             alpha: float, the learning rate
             gamma: float, the discount factor
-            m: int, the number of episodes to train the agent for
+            m: int, the number of episodes to train the self for
             epsilon: float, the epsilon value for the epsilon-greedy policy
             print_stats: bool, whether to print the statistics during initialization
         """
@@ -714,16 +758,21 @@ class Q_learning(Algorithm):
             self.rewards_hist.append((cum_reward, steps))
             self.rewards_hist_compare.append((cum_reward_compare, steps))
             last_state = 'Terminal' if steps >= max_steps else last_state
-            print(f"Episode {i+1} completed on state {last_state} with cumulative reward: {cum_reward}, comparable: {cum_reward_compare}") if verbose > 0 else None
-            print(f"Q explored: {100*q_explored/(self.state_size*5)}. Epsilon: {self.epsilon}") if verbose > 1 else None
+            self.decay_epsilon(i)
+            if (i+1) % show_progress == 0:
+                self.evaluate_during_train(iterations=3, current_episode=i, max_steps=max_steps)
 
             # For measuring how accurate the Q function is 
             if self.special_Q: 
                 q_qual = self.q_measure()
+                self.q_measure_hist.append(q_qual)
                 print(f"Q measure: {q_qual} %") if verbose > 1 else None
-            self.decay_epsilon(i)
-            if (i+1) % show_progress == 0:
-                self.evaluate_during_train(iterations=3, current_episode=i, max_steps=max_steps)
+
+            q_explored_per = 100*q_explored/(self.state_size*5)
+            self.q_explored_hist.append(q_explored_per)
+            print(f"Episode {i+1} completed on state {last_state} with cumulative reward: {cum_reward}, comparable: {cum_reward_compare}") if verbose > 0 else None
+            print(f"Q explored: {q_explored_per}. Epsilon: {self.epsilon}") if verbose > 1 else None
+
             if render: 
                 env = gym.make('highway-v0', render_mode=render_mode, config=self.config) 
 
@@ -740,7 +789,7 @@ class SARSA(Algorithm):
         Arguments:
             alpha: float, the learning rate
             gamma: float, the discount factor
-            m: int, the number of episodes to train the agent for
+            m: int, the number of episodes to train the self for
             epsilon: float, the epsilon value for the epsilon-greedy policy
             print_stats: bool, whether to print the statistics during initialization
         """
@@ -792,12 +841,16 @@ class SARSA(Algorithm):
             self.rewards_hist.append((cum_reward, steps))
             self.rewards_hist_compare.append((cum_reward_compare, steps))
             last_state = 'Terminal' if steps >= max_steps else last_state
+            
+            q_explored_per = 100*q_explored/(self.state_size*5)
+            self.q_explored_hist.append(q_explored_per)
             print(f"Episode {i+1} completed on state {last_state} with cumulative reward: {cum_reward}, comparable: {cum_reward_compare}") if verbose > 0 else None
-            print(f"Q explored: {100*q_explored/(self.state_size*5)}. Epsilon: {self.epsilon}") if verbose > 1 else None
+            print(f"Q explored: {q_explored_per}. Epsilon: {self.epsilon}") if verbose > 1 else None
 
             # For measuring how accurate the Q function is
             if self.special_Q:
                 q_qual = self.q_measure()
+                self.q_measure_hist.append(q_qual)
                 print(f"Q measure: {q_qual} %") if verbose > 1 else None
             self.decay_epsilon(i)
             

@@ -1,3 +1,8 @@
+import numpy as np
+import base64
+from IPython.display import HTML
+import io
+
 def fix_reward(reward, position, action, to_right_reward=5, to_right_skewness=2, change_lane_reward=-0.5):
     """
     This function is used to correct the reward function, which is not correctly outputted by the environment
@@ -83,3 +88,17 @@ def get_params(model):
         'past_action_len': model.past_actions.maxlen
     }
     return params
+
+def random_argmax(vector):
+    """
+    Function to output the argmax of a vector, in case of multiple max values, one is randomly chosen
+    """
+    vector = np.array(vector)
+    return np.random.choice(np.flatnonzero(vector == vector.max()))
+
+def display_animation(filepath):
+    video = io.open(filepath, 'r+b').read()
+    encoded = base64.b64encode(video)
+    return HTML(data='''<video alt="test" controls>
+                <source src="data:video/mp4;base64,{0}" type="video/mp4" />
+                 </video>'''.format(encoded.decode('ascii')))
