@@ -6,6 +6,7 @@ from tqdm.notebook import tqdm
 import pandas as pd
 import pickle
 from matplotlib import pyplot as plt
+from IPython.display import clear_output
 import os
 from collections import deque
 from Functions.config_kinematics_discrete import default_config, optimum_q_kinematics
@@ -413,6 +414,7 @@ class Algorithm(Kinematics):
         self.epsilon_decay, self.min_epsilon = epsilon_decay, min_epsilon
         self.Q_stats = self.Q.copy()
         self.rewards_hist, self.rewards_hist_compare = [], []
+        self.rewards_ev_hist, self.steps_ev_hist, self.actions_ev_dist, self.speed_ev_hist = [], [], [], []
 
     def initialize_Q(self, print_stats = False):
         # Combine the possible states with the possible actions
@@ -526,8 +528,8 @@ class Algorithm(Kinematics):
             if q_actions[state] == optimum_q_kinematics[state]:
                 score+=1
         return 100*(score/len(optimum_q_kinematics))
-
-    def evaluate(self, iterations=10, render=False): 
+    
+    def get_config_control(self):
         config_control = self.config.copy() 
         # Change to default values
         config_control.update({
@@ -540,8 +542,11 @@ class Algorithm(Kinematics):
             "right_lane_reward": 0.1,
             "lane_change_reward": 0
         })
+        return config_control
+
+    def evaluate(self, iterations=10, render=False): 
         render_mode = 'human' if render else None
-        controlled_env = gym.make('highway-v0', render_mode=render_mode, config=config_control)
+        controlled_env = gym.make('highway-fast-v0', render_mode=render_mode, config=self.get_config_control())
         evaluation_data = []
         speed_data  = []
         for i in tqdm(range(iterations)): 
@@ -568,70 +573,69 @@ class Algorithm(Kinematics):
 
         return mean_reward, mean_steps, mean_reward_per_step, mean_speed
     
-
-class Sarsa(Algorithm):
-    def __init__(
-        self,
-        **kwargs,
-        ):
-        """
-        SARSA class constructor
-        Algorithm arguments:
-            alpha: float, the learning rate
-            gamma: float, the discount factor
-            m: int, the number of episodes to train the agent for
-            epsilon: float, the epsilon value for the epsilon-greedy policy
-            print_stats: bool, whether to print the statistics during initialization
-        """
-        super().__init__(**kwargs)
-        self.algorithm_type = 'Sarsa'
-        
-    def train(self, m=100, max_steps=200, verbose=0, render=False): 
-        render_mode = 'human' if render else None
-        env = gym.make('highway-v0', render_mode=render_mode, config=self.config) 
-        q_explored = np.count_nonzero(list(self.Q.values()))
-        for i in tqdm(range(m)):
-            # Reset the environment and get the initial state and action for that state
-            obs, info = env.reset(seed = np.random.randint(1000))
+    def evaluate_during_train(self, current_episode, iterations=4, max_steps=200):
+        controlled_env = gym.make('highway-fast-v0', config=self.get_config_control())
+        reward_hist, speed_hist, actions_hist, steps_hist  = [], [], [], []
+        print('Evaluating the model during training...')
+        for i in range(iterations):
+            obs, info = controlled_env.reset(seed = np.random.randint(100000))
             self.current_obs = obs
-            done, state, action = False, self.get_state(), self.epsilon_greedy(state)
-            cum_reward, steps, last_state, done = 0,0, None, False
-
+            done, steps = False, 0
+            cum_reward = 0
             while not done and steps < max_steps:
-                next_obs, reward, done, truncate, info = env.step(action)
-
-                # Update the state and action after the environment step
-                self.current_obs = next_obs
-                next_state = self.get_state()
-                next_action,_ = self.epsilon_greedy(next_state)
-                next_reward = fix_reward(reward, next_obs[0], action, self.to_right_reward, self.to_right_skewness, self.change_lane_reward)
-
-                print(steps, next_state, decode_meta_action(next_action), reward) if verbose > 2 else None
-                if self.Q[(state, action)] == 0:
-                    q_explored += 1
-                self.Q_stats[(state, action)] += 1
-                
-                # Update the Q value for the state and action pair 
-                self.Q[(state, action)] += self.alpha*(next_reward + self.gamma*self.Q[(next_state, next_action)] - self.Q[(state, action)])
-
-                if done:
-                    last_state = state
-
-                state, action = next_state, next_action
-
-                # If we cant turn left or right, the car wont be turning, so dont append a turning signal
-                if (state[4] == -1 and action == 0) or (state[4] == 1 and action == 2):
-                    self.past_actions.append(1) 
-                else:
-                    self.past_actions.append(action)
-                cum_reward += next_reward
+                state = self.get_state()
+                action = self.policy_Q(state)
+                actions_hist.append(action)
+                self.current_obs, reward, done, truncate, info = controlled_env.step(action)
+                done = done | truncate
+                speed_hist.append(self.current_obs[0,2])
+                cum_reward += reward
                 steps += 1
-            self.rewards_hist.append((cum_reward, steps))
-            print(f"Episode {i+1} completed on state {last_state} with cumulative reward: {cum_reward}") if verbose > 0 else None
-            print(f"Q explored: {100*q_explored/(self.state_size*5)}. Epsilon: {self.epsilon}") if verbose > 1 else None
-            self.decay_epsilon(i)
-        env.close()
-    
+            steps_hist.append(steps)
+            reward_hist.append(cum_reward)
+        
+        mean_reward = np.mean(reward_hist)
+        mean_speed = np.mean(speed_hist)
+        mean_steps = np.mean(steps_hist)
+        actions_hist = np.array(actions_hist)
+        action_distribution = np.array([np.sum(actions_hist == i) for i in range(5)]) / len(actions_hist)
+
+        self.rewards_ev_hist.append(mean_reward)
+        self.speed_ev_hist.append(mean_speed)
+        self.steps_ev_hist.append(mean_steps)
+        self.actions_ev_dist.append(action_distribution)
+
+        # Now plot the results
+        clear_output(wait=True)
+        plt.figure(figsize=[16, 10])
+        plt.suptitle(f"Stats for episode {current_episode}")
+
+        plt.subplot(2, 2, 1)
+        plt.plot(self.rewards_ev_hist, label='Rewards')
+        plt.title('Mean reward per episode')
+        plt.grid()
+
+        plt.subplot(2, 2, 2)
+        plt.plot(self.speed_ev_hist, label='Speed')
+        plt.title('Mean speed per episode')
+        plt.grid()
+
+        plt.subplot(2, 2, 3)
+        plt.plot(self.steps_ev_hist, label='Steps')
+        plt.title('Mean steps per episode')
+        plt.grid()
+
+        plt.subplot(2, 2, 4)
+        action_distribution_history = np.array(self.actions_ev_dist)
+        for i in range(5):
+            plt.plot(action_distribution_history[:, i], label=f'{decode_meta_action(i)}')
+        plt.title('Action distribution')
+        plt.grid()
+        plt.legend()
+        plt.show()
+
+        controlled_env.close()
+
 
 class Q_learning(Algorithm):
     def __init__(
@@ -702,61 +706,84 @@ class Q_learning(Algorithm):
                 print(f"Q measure: {q_qual} %") if verbose > 1 else None
             self.decay_epsilon(i)
             if i+1 % show_progress == 0:
-                self.test(sleep_time=0, time_after_crash=1, max_steps=max_steps)
+                self.evaluate_during_train(iterations=3, i=i, max_steps=max_steps, render=False)
             if render: 
                 env = gym.make('highway-v0', render_mode=render_mode, config=self.config) 
+
         env.close()
 
 
-class MonteCarlo(Algorithm):
-    def __init__(self, **kwargs):
-        """Constructor for the MonteCarlo algorithm class."""
-
+class SARSA(Algorithm):
+    def __init__(
+        self,
+        **kwargs,
+        ):
+        """
+        SARSA class constructor
+        Arguments:
+            alpha: float, the learning rate
+            gamma: float, the discount factor
+            m: int, the number of episodes to train the agent for
+            epsilon: float, the epsilon value for the epsilon-greedy policy
+            print_stats: bool, whether to print the statistics during initialization
+        """
         super().__init__(**kwargs)
-        self.algorithm_type = 'Q_learning'
-        self.returns = {}  # Store returns for each (state, action) pair
-        self.visits = {}   # Store visit counts for each (state, action) pair
+        self.algorithm_type = 'SARSA'
 
-    def train(self, m=100, max_steps=200, verbose=0):
-        """Train the MonteCarlo agent."""
-        env = gym.make('highway-v0', render_mode=None, config=self.config)
-
+    def train(self, m=100, max_steps=200, verbose=0, render=False, show_progress=25):
+        render_mode = 'human' if render else None
+        env = gym.make('highway-v0', render_mode=render_mode, config=self.config) 
+        q_explored = np.count_nonzero(list(self.Q.values()))
         for i in tqdm(range(m)):
-            episode_history = []
-            cum_reward, steps = 0,0
-
-            obs, info = env.reset(seed=np.random.randint(1000))
+            # For each episode, reset the environment and get the initial state
+            obs, info = env.reset(seed = np.random.randint(1000))
             self.current_obs = obs
-            done = False
             state = self.get_state()
+            cum_reward,cum_reward_compare,steps, last_state, done = 0,0,0, None, False
 
+            # Get the action to make in the current state, and step the environment
+            action, _ = self.epsilon_greedy(state)
             while not done and steps < max_steps:
-                action, random = self.epsilon_greedy(state) 
                 next_obs, reward, done, truncate, info = env.step(action)
-                if done:
-                    self.hit_random.append(random)
-
-                reward = fix_reward(reward, next_obs[0], self.to_right_reward, self.to_right_skewness, self.change_lane_reward, self.current_obs[0])
+                cum_reward_compare += reward
+                next_reward = fix_reward(reward, next_obs[0], action, self.to_right_reward, self.to_right_skewness, self.change_lane_reward)
+                self.current_obs = next_obs
                 next_state = self.get_state()
 
-                episode_history.append((state, action, reward))
+                print(f'{steps}:', state, decode_meta_action(action), next_reward) if verbose > 2 else None
+                if done:
+                    last_state = state
 
-                cum_reward += reward
+                if self.Q[(state, action)] == 0:
+                    q_explored += 1
+                cum_reward += next_reward
+                
+                next_action, _ = self.epsilon_greedy(next_state)
+                self.Q[(state, action)] += self.alpha*(next_reward + self.gamma*self.Q[(next_state, next_action)] - self.Q[(state,action)])
+                self.Q_stats[(state, action)] += 1
                 state = next_state
-                self.current_obs = next_obs
-                steps += 1
+                action = next_action
 
-            G = 0
-            for state, action, reward in reversed(episode_history):
-                G = self.gamma * G + reward 
-                if (state, action) not in [(s, a) for s, a, _ in episode_history[:-1]]: # First visit
-                    self.returns[(state, action)] = self.returns.get((state, action), 0) + G
-                    self.visits[(state, action)] = self.visits.get((state, action), 0) + 1
-                    self.Q[(state, action)] = self.returns[(state, action)] / self.visits[(state, action)]
+                # If we cant turn left or right, the car wont be turning, so dont append a turning signal
+                if (state[4] == -1 and action == 0) or (state[4] == 1 and action == 2):
+                    self.past_actions.append(1) 
+                else:
+                    self.past_actions.append(action)
+                steps += 1
+                print(f'Q value for {state, decode_meta_action(action)} updated from {self.Q[(state,action)]} to {self.Q[(state,action)]}') if verbose > 3 else None
 
             self.rewards_hist.append((cum_reward, steps))
-            print(f"Episode {i+1} completed with cumulative reward: {cum_reward}. Epsilon: {self.epsilon}") if verbose > 0 else None
+            self.rewards_hist_compare.append((cum_reward_compare, steps))
+            last_state = 'Terminal' if steps >= max_steps else last_state
+            print(f"Episode {i+1} completed on state {last_state} with cumulative reward: {cum_reward}, comparable: {cum_reward_compare}") if verbose > 0 else None
+            print(f"Q explored: {100*q_explored/(self.state_size*5)}. Epsilon: {self.epsilon}") if verbose > 1 else None
 
+            # For measuring how accurate the Q function is
+            if self.special_Q:
+                q_qual = self.q_measure()
+                print(f"Q measure: {q_qual} %") if verbose > 1 else None
             self.decay_epsilon(i)
             
+            if (i+1) % show_progress == 0:
+                self.evaluate_during_train(iterations=3, current_episode=i, max_steps=max_steps)
         env.close()
