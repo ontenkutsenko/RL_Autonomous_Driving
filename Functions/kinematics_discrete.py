@@ -10,7 +10,7 @@ from IPython.display import clear_output
 import os
 from collections import deque
 from Functions.config_kinematics_discrete import default_config, optimum_q_kinematics
-from funcs_kinematics_discrete import fix_reward, decode_meta_action
+from Functions.funcs_kinematics_discrete import fix_reward, decode_meta_action
 
 class ObservationType: 
     def __init__(self, 
@@ -436,7 +436,6 @@ class Algorithm(Kinematics):
         values = [self.Q[(state, action)] for action in range(5)]
         return np.argmax(values)   
 
-
     def decay_epsilon(self, episode):
         if self.epsilon > self.min_epsilon:
             self.epsilon *= self.epsilon_decay
@@ -636,6 +635,24 @@ class Algorithm(Kinematics):
 
         controlled_env.close()
 
+    def get_params(self): 
+        return {
+            "alpha": self.alpha,
+            "gamma": self.gamma,
+            "epsilon": self.epsilon,
+            "epsilon_decay": self.epsilon_decay,
+            "min_epsilon": self.min_epsilon,
+            "state_type": self.state_type,
+            "special_Q": self.special_Q,
+            "past_action_len": self.past_actions.maxlen,
+            "x_speed_coef": self.x_speed_coef,
+            "y_speed_coef": self.y_speed_coef,
+            "to_right_reward": self.to_right_reward,
+            "to_right_skewness": self.to_right_skewness,
+            "change_lane_reward": self.change_lane_reward,
+            "collision_reward": self.config["collision_reward"],
+        }
+
 
 class Q_learning(Algorithm):
     def __init__(
@@ -705,8 +722,8 @@ class Q_learning(Algorithm):
                 q_qual = self.q_measure()
                 print(f"Q measure: {q_qual} %") if verbose > 1 else None
             self.decay_epsilon(i)
-            if i+1 % show_progress == 0:
-                self.evaluate_during_train(iterations=3, i=i, max_steps=max_steps, render=False)
+            if (i+1) % show_progress == 0:
+                self.evaluate_during_train(iterations=3, current_episode=i, max_steps=max_steps)
             if render: 
                 env = gym.make('highway-v0', render_mode=render_mode, config=self.config) 
 

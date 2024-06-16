@@ -57,3 +57,29 @@ def decode_Q(Q):
     Function to decode the Q-values
     """
     return {(decode_danger(key[0]), decode_meta_action(key[1])) : value for key, value in Q.items()}
+
+def get_params(model):
+    params = {
+        'epsilon': 1,
+        'epsilon_decay': model.epsilon_decay,
+        'min_epsilon': model.min_epsilon,
+        'alpha': model.alpha,
+        'gamma': model.gamma,
+        'state_type': model.state_type,
+        'policy_frequency': model.config['policy_frequency'],
+        'sim_frequency': model.config['simulation_frequency'],
+        'danger_threshold_x': model.danger_threshold_x,
+        'danger_threshold_y': model.danger_threshold_y,
+        'x_speed_coef': model.x_speed_coef,
+        'y_speed_coef': model.y_speed_coef,
+        'lane_tolerance': model.lane_tolerance,
+        'collision_reward': model.config['collision_reward'],
+        'high_speed_reward': model.config['high_speed_reward'],
+        'reward_speed_range': model.config['reward_speed_range'],
+        'to_right_reward': model.to_right_reward,
+        'to_right_skewness': model.to_right_skewness,
+        'change_lane_reward': model.change_lane_reward,
+        'special_Q': model.special_Q,
+        'past_action_len': model.past_actions.maxlen
+    }
+    return params
